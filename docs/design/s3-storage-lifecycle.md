@@ -296,3 +296,33 @@ The PoC will benchmark the four core architectural assumptions against MinIO and
 4. **Crash Recovery & Orphan Audit**:
    - Send `SIGKILL` to Lifecycle Agent mid-upload and Compactor mid-merge.
    - Verify zero reader degradation and automated cleanup of untracked parts.
+
+---
+
+## 10. Phased Delivery Roadmap (Two Production PRs)
+
+To keep reviews bite-sized and strictly bounded without compromising on stability or test coverage, implementation is delivered across two focused PRs. Comprehensive testing, crash recovery, and edge-case hardening are built directly into both PRs:
+
+### PR 1: Ingress Engine & Storage Substrate (Lifecycle Uploader)
+- **Scope**:
+  - AWS SDK v2 client integration (`pkg/fs/remote/aws`) with endpoint/profile resolver.
+  - Lifecycle Agent migration scan and pre-upload local compaction pass (reusing native BanyanDB LSM merger).
+  - Size-aware upload engine (Single `PutObject` for `<16MB`, Multipart Upload for `≥16MB` with bounded worker pool).
+  - Two-phase atomic sentinel publication (`manifests/<epoch>.snp`) and local `progress.json` checkpointing.
+  - Safe pruning gate ensuring local NVMe is never cleared until S3 integrity is verified.
+- **Hardening & Verification Included in PR 1**:
+  - Unit tests for chunk slicing and checksum generation.
+  - Integration tests with local MinIO container verifying upload integrity.
+  - Fault injection / crash recovery tests (`SIGKILL` mid-MPU upload) proving seamless resume from `progress.json` and zero orphaned leak.
+
+### PR 2: Egress & Query Engine (Data Node Range-GET & FileCache)
+- **Scope**:
+  - S3 block-aligned HTTP Range-GET reader (`s3.GetObjectInput{Range}`) streaming exact columnar byte slices (`timestamps.bin`, `fv.bin`).
+  - Two-Tier local NVMe `FileCache` (L1 memory / L2 NVMe LRU) for `sidx` series indexes and column vectors.
+  - Integration with BanyanDB's query engine for transparent time-range scans across local NVMe and S3 tiers with zero full-segment pre-staging.
+  - S3-side background compaction leveraging BanyanDB's existing native LSM merge policies and scratch space.
+- **Hardening & Verification Included in PR 2**:
+  - Cold-cache vs. warm-cache query benchmarks and local NVMe parity validation.
+  - Boundary condition tests for partial-block reads, concurrent cache fill, and LRU cache eviction.
+  - Network jitter / S3 503 retry and backoff testing.
+
